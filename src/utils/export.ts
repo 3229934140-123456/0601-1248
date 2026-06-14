@@ -80,12 +80,27 @@ export const exportPriceCheckReport = (results: PriceCheckResult[], campaignName
     { key: 'originalPrice' as const, label: '原价(元)' },
     { key: 'activityPrice' as const, label: '活动价(元)' },
     { key: 'costPrice' as const, label: '成本价(元)' },
-    { key: 'activityMargin' as const, label: '活动毛利率(%)' },
-    { key: 'finalPriceWithCoupons' as const, label: '叠券后价(元)' },
-    { key: 'finalMargin' as const, label: '叠券毛利率(%)' },
+    { key: 'activityMargin' as const, label: '活动毛利率%' },
+    { key: 'finalPriceWithCoupons' as const, label: '叠券后价' },
+    { key: 'finalMargin' as const, label: '叠券毛利率%' },
+    { key: 'riskCategoriesText' as const, label: '风险类别' },
     { key: 'riskLevel' as const, label: '风险等级' },
+    { key: 'processingStatus' as const, label: '处理状态' },
+    { key: 'processingNote' as const, label: '处理备注' },
+    { key: 'processedAt' as const, label: '处理时间' },
     { key: 'suggestionsText' as const, label: '建议' },
   ];
+
+  const formatProcessingStatus = (status: string) => {
+    switch (status) {
+      case 'pending': return '待处理';
+      case 'price_adjusted': return '已调价';
+      case 'coupon_adjusted': return '已调券';
+      case 'both_adjusted': return '已调价调券';
+      case 'ignored': return '已忽略';
+      default: return '待处理';
+    }
+  };
 
   const formatDetailRow = (r: PriceCheckResult) => ({
     productName: r.productName,
@@ -95,7 +110,15 @@ export const exportPriceCheckReport = (results: PriceCheckResult[], campaignName
     activityMargin: r.activityMargin.toFixed(2),
     finalPriceWithCoupons: r.finalPriceWithCoupons,
     finalMargin: r.finalMargin.toFixed(2),
+    riskCategoriesText: r.riskCategories.map(c => 
+      c === 'below_cost' ? '活动价亏本' : 
+      c === 'coupon_below_cost' ? '叠券亏本' : 
+      c === 'low_margin' ? '低毛利预警' : '安全通过'
+    ).join('、'),
     riskLevel: r.riskLevel === 'high' ? '高' : r.riskLevel === 'medium' ? '中' : '低',
+    processingStatus: formatProcessingStatus(r.processingStatus || 'pending'),
+    processingNote: r.processingNote || '',
+    processedAt: r.processedAt || '',
     suggestionsText: r.suggestions.join('；'),
   });
 
@@ -124,13 +147,14 @@ export const exportPriceCheckReport = (results: PriceCheckResult[], campaignName
     { key: 'originalPrice' as const, label: '原价(元)' },
     { key: 'activityPrice' as const, label: '活动价(元)' },
     { key: 'costPrice' as const, label: '成本价(元)' },
-    { key: 'activityMargin' as const, label: '活动毛利率(%)' },
-    { key: 'finalPriceWithCoupons' as const, label: '叠券后价(元)' },
-    { key: 'finalMargin' as const, label: '叠券毛利率(%)' },
-    { key: 'belowCost' as const, label: '低于成本' },
-    { key: 'couponStackRisk' as const, label: '叠券风险' },
+    { key: 'activityMargin' as const, label: '活动毛利率%' },
+    { key: 'finalPriceWithCoupons' as const, label: '叠券后价' },
+    { key: 'finalMargin' as const, label: '叠券毛利率%' },
     { key: 'riskCategoriesText' as const, label: '风险类别' },
     { key: 'riskLevel' as const, label: '风险等级' },
+    { key: 'processingStatus' as const, label: '处理状态' },
+    { key: 'processingNote' as const, label: '处理备注' },
+    { key: 'processedAt' as const, label: '处理时间' },
     { key: 'suggestionsText' as const, label: '建议' },
   ];
   const fullRows = results.map(r => ({
@@ -141,14 +165,15 @@ export const exportPriceCheckReport = (results: PriceCheckResult[], campaignName
     activityMargin: r.activityMargin.toFixed(2),
     finalPriceWithCoupons: r.finalPriceWithCoupons,
     finalMargin: r.finalMargin.toFixed(2),
-    belowCost: r.belowCost ? '是' : '否',
-    couponStackRisk: r.couponStackRisk ? '是' : '否',
     riskCategoriesText: r.riskCategories.map(c => 
       c === 'below_cost' ? '活动价亏本' : 
       c === 'coupon_below_cost' ? '叠券亏本' : 
       c === 'low_margin' ? '低毛利预警' : '安全通过'
     ).join('、'),
     riskLevel: r.riskLevel === 'high' ? '高' : r.riskLevel === 'medium' ? '中' : '低',
+    processingStatus: formatProcessingStatus(r.processingStatus || 'pending'),
+    processingNote: r.processingNote || '',
+    processedAt: r.processedAt || '',
     suggestionsText: r.suggestions.join('；'),
   }));
   const fullWsData = fullRows.map(row => 
@@ -168,7 +193,10 @@ export const exportDashboardReport = (
   trendData: DailyTrend[],
   rankingData: ProductRanking[],
   comparisonData: BeforeAfterComparison[],
-  campaignName: string
+  campaignName: string,
+  compareStats?: DashboardStats,
+  compareRanking?: ProductRanking[],
+  compareName?: string
 ) => {
   const summaryData = [
     { 指标: '成交总额', 数值: `¥${stats.totalRevenue.toLocaleString()}` },
@@ -222,6 +250,57 @@ export const exportDashboardReport = (
 
   const comparisonWs = XLSX.utils.json_to_sheet(comparisonData);
   XLSX.utils.book_append_sheet(wb, comparisonWs, '活动前后对比');
+
+  if (compareStats && compareRanking) {
+    const nameA = campaignName;
+    const nameB = compareName || '对比活动';
+
+    const calcDiff = (a: number, b: number) => {
+      if (b === 0) return a > 0 ? '100%' : '0%';
+      return `${(((a - b) / b) * 100).toFixed(2)}%`;
+    };
+
+    const compareSummaryData = [
+      { 指标: '成交额(元)', [nameA]: stats.totalRevenue.toLocaleString(), [nameB]: compareStats.totalRevenue.toLocaleString(), 差异: calcDiff(stats.totalRevenue, compareStats.totalRevenue) },
+      { 指标: '订单数', [nameA]: stats.totalOrders.toLocaleString(), [nameB]: compareStats.totalOrders.toLocaleString(), 差异: calcDiff(stats.totalOrders, compareStats.totalOrders) },
+      { 指标: '转化率(%)', [nameA]: (stats.conversionRate * 100).toFixed(2), [nameB]: (compareStats.conversionRate * 100).toFixed(2), 差异: calcDiff(stats.conversionRate * 100, compareStats.conversionRate * 100) },
+      { 指标: '访客数', [nameA]: stats.totalVisitors.toLocaleString(), [nameB]: compareStats.totalVisitors.toLocaleString(), 差异: calcDiff(stats.totalVisitors, compareStats.totalVisitors) },
+      { 指标: '客单价(元)', [nameA]: stats.averageOrderValue.toFixed(2), [nameB]: compareStats.averageOrderValue.toFixed(2), 差异: calcDiff(stats.averageOrderValue, compareStats.averageOrderValue) },
+      { 指标: 'ROI', [nameA]: stats.roi.toFixed(2), [nameB]: compareStats.roi.toFixed(2), 差异: calcDiff(stats.roi, compareStats.roi) },
+    ];
+
+    const rankingMapA = new Map(rankingData.map(r => [r.productId, r]));
+    const rankingMapB = new Map(compareRanking.map(r => [r.productId, r]));
+    const intersectIds = [...rankingMapA.keys()].filter(id => rankingMapB.has(id));
+
+    const rankingDiffData = intersectIds.map(id => {
+      const rA = rankingMapA.get(id)!;
+      const rB = rankingMapB.get(id)!;
+      return {
+        商品名称: rA.productName,
+        [`${nameA}_成交额`]: rA.revenue.toLocaleString(),
+        [`${nameB}_成交额`]: rB.revenue.toLocaleString(),
+        成交额差异: calcDiff(rA.revenue, rB.revenue),
+        [`${nameA}_销量`]: rA.quantity,
+        [`${nameB}_销量`]: rB.quantity,
+        销量差异: calcDiff(rA.quantity, rB.quantity),
+      };
+    }).sort((a, b) => {
+      const diffA = parseFloat(a.成交额差异);
+      const diffB = parseFloat(b.成交额差异);
+      return diffB - diffA;
+    });
+
+    const compareWsData = [
+      ...compareSummaryData,
+      {},
+      { 指标: '=== 交集商品排行差异 ===', [nameA]: '', [nameB]: '', 差异: '' },
+      ...rankingDiffData,
+    ];
+
+    const compareWs = XLSX.utils.json_to_sheet(compareWsData);
+    XLSX.utils.book_append_sheet(wb, compareWs, '活动对比');
+  }
 
   XLSX.writeFile(wb, `活动复盘报告_${campaignName}_${formatDate(new Date())}.xlsx`);
 };

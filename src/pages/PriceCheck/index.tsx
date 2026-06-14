@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle2, XCircle, Download, RefreshCw,
   ChevronDown, ChevronUp, Shield, AlertOctagon, TrendingDown,
-  ArrowLeft, Filter, Info
+  ArrowLeft, Filter, Info, Check
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Table } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
@@ -36,18 +37,31 @@ const riskCategoryBadgeVariant: Record<RiskCategory, any> = {
   safe: 'success',
 };
 
+const processingStatusConfig: Record<string, { label: string; variant: any }> = {
+  pending: { label: '待处理', variant: 'danger' },
+  price_adjusted: { label: '已调价', variant: 'info' },
+  coupon_adjusted: { label: '已调券', variant: 'warning' },
+  both_adjusted: { label: '已处理完毕', variant: 'success' },
+  ignored: { label: '已忽略', variant: 'default' },
+};
+
 export const PriceCheckPage = () => {
   const navigate = useNavigate();
   const { 
     priceCheckResults, campaigns, products, 
-    runPriceCheck, clearPriceCheckResults 
+    runPriceCheck, clearPriceCheckResults,
+    setPriceCheckProcessingStatus 
   } = useStore();
   
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [riskFilter, setRiskFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [processingFilter, setProcessingFilter] = useState<string>('all');
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [isChecking, setIsChecking] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState('');
+  const [showExportToast, setShowExportToast] = useState(false);
 
   useEffect(() => {
     if (campaigns.length > 0 && !selectedCampaignId) {
@@ -67,8 +81,17 @@ export const PriceCheckPage = () => {
     if (categoryFilter !== 'all') {
       results = results.filter(r => r.riskCategories.includes(categoryFilter as RiskCategory));
     }
+    if (processingFilter !== 'all') {
+      if (processingFilter === 'processed') {
+        results = results.filter(r => r.processingStatus !== 'pending' && r.processingStatus !== 'ignored');
+      } else if (processingFilter === 'pending') {
+        results = results.filter(r => r.processingStatus === 'pending');
+      } else if (processingFilter === 'ignored') {
+        results = results.filter(r => r.processingStatus === 'ignored');
+      }
+    }
     return results;
-  }, [priceCheckResults, riskFilter, categoryFilter]);
+  }, [priceCheckResults, riskFilter, categoryFilter, processingFilter]);
 
   const stats = useMemo(() => {
     const total = priceCheckResults.length;
@@ -79,8 +102,12 @@ export const PriceCheckPage = () => {
     const belowCost = priceCheckResults.filter(r => r.riskCategories.includes('below_cost')).length;
     const couponBelowCost = priceCheckResults.filter(r => r.riskCategories.includes('coupon_below_cost')).length;
     const lowMargin = priceCheckResults.filter(r => r.riskCategories.includes('low_margin')).length;
+    const processed = priceCheckResults.filter(r => r.processingStatus !== 'pending' && r.processingStatus !== 'ignored').length;
+    const pending = priceCheckResults.filter(r => r.processingStatus === 'pending').length;
+    const ignored = priceCheckResults.filter(r => r.processingStatus === 'ignored').length;
+    const processRate = total > 0 ? ((processed / total) * 100).toFixed(1) : '0';
     
-    return { total, high, medium, low, passed, belowCost, couponBelowCost, lowMargin };
+    return { total, high, medium, low, passed, belowCost, couponBelowCost, lowMargin, processed, pending, ignored, processRate };
   }, [priceCheckResults]);
 
   const handleRunCheck = async () => {
@@ -108,6 +135,8 @@ export const PriceCheckPage = () => {
   const handleExport = () => {
     if (!selectedCampaign || priceCheckResults.length === 0) return;
     exportPriceCheckReport(priceCheckResults, selectedCampaign.name);
+    setShowExportToast(true);
+    setTimeout(() => setShowExportToast(false), 3000);
   };
 
   const getRiskBadge = (riskLevel: PriceCheckResult['riskLevel']) => {
@@ -305,7 +334,7 @@ export const PriceCheckPage = () => {
 
       {priceCheckResults.length > 0 && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -361,6 +390,20 @@ export const PriceCheckPage = () => {
                 </div>
                 <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center animate-pulse">
                   <AlertOctagon className="w-6 h-6 text-red-600" />
+                </div>
+              </div>
+            </Card>
+            <Card className="p-4 border-l-4 border-l-indigo-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">处理进度</p>
+                  <p className="text-3xl font-bold text-indigo-600 mt-1">{stats.processRate}%</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {stats.processed} 已处理 / {stats.pending} 待处理
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
+                  <CheckCircle2 className="w-6 h-6 text-indigo-600" />
                 </div>
               </div>
             </Card>
@@ -501,6 +544,20 @@ export const PriceCheckPage = () => {
                       className="pl-9"
                     />
                   </div>
+                  <div className="relative">
+                    <Filter className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Select
+                      value={processingFilter}
+                      onChange={(e) => setProcessingFilter(e.target.value)}
+                      options={[
+                        { value: 'all', label: '全部处理状态' },
+                        { value: 'pending', label: '待处理' },
+                        { value: 'processed', label: '已处理' },
+                        { value: 'ignored', label: '已忽略' },
+                      ]}
+                      className="pl-9"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
@@ -528,6 +585,27 @@ export const PriceCheckPage = () => {
               </div>
             </Card>
           </div>
+
+          {showExportToast && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+              <p className="text-sm font-medium text-emerald-700">
+                报告已导出，处理状态已包含在文件中
+              </p>
+            </div>
+          )}
+
+          {stats.processed > 0 && (
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Info className="w-5 h-5 text-blue-500" />
+                <p className="text-sm text-blue-700">
+                  已有 <span className="font-bold">{stats.processed}</span> 个风险已处理，
+                  <span className="font-bold">{stats.pending}</span> 个待处理
+                </p>
+              </div>
+            </div>
+          )}
 
           <Card>
             <Card.Header>
@@ -561,6 +639,8 @@ export const PriceCheckPage = () => {
                       <th className="px-4 py-3">叠券风险</th>
                       <th className="px-4 py-3">风险等级</th>
                       <th className="px-4 py-3">风险类别</th>
+                      <th className="px-4 py-3">处理状态</th>
+                      <th className="px-4 py-3">处理备注</th>
                     </tr>
                   </Table.Header>
                   <Table.Body>
@@ -650,10 +730,82 @@ export const PriceCheckPage = () => {
                             <Table.Cell>
                               {getRiskCategoryBadges(result.riskCategories)}
                             </Table.Cell>
+                            <Table.Cell>
+                              <div onClick={(e) => e.stopPropagation()}>
+                                <Select
+                                  value={result.processingStatus}
+                                  onChange={(e) => {
+                                    setPriceCheckProcessingStatus(
+                                      result.productId,
+                                      e.target.value as any,
+                                      result.processingNote
+                                    );
+                                  }}
+                                  options={Object.entries(processingStatusConfig).map(([value, config]) => ({
+                                    value,
+                                    label: config.label
+                                  }))}
+                                  className="text-xs py-1 h-8"
+                                />
+                              </div>
+                            </Table.Cell>
+                            <Table.Cell>
+                              <div onClick={(e) => e.stopPropagation()}>
+                                {editingNoteId === result.productId ? (
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      value={noteText}
+                                      onChange={(e) => setNoteText(e.target.value)}
+                                      placeholder="输入处理备注..."
+                                      className="text-xs py-1 h-8"
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          setPriceCheckProcessingStatus(
+                                            result.productId,
+                                            result.processingStatus,
+                                            noteText
+                                          );
+                                          setEditingNoteId(null);
+                                          setNoteText('');
+                                        }
+                                      }}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setPriceCheckProcessingStatus(
+                                          result.productId,
+                                          result.processingStatus,
+                                          noteText
+                                        );
+                                        setEditingNoteId(null);
+                                        setNoteText('');
+                                      }}
+                                    >
+                                      <Check className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div
+                                    className="cursor-pointer text-sm text-slate-600 hover:text-[#1e3a5f] min-h-[32px] flex items-center"
+                                    onClick={() => {
+                                      setEditingNoteId(result.productId);
+                                      setNoteText(result.processingNote || '');
+                                    }}
+                                  >
+                                    {result.processingNote || (
+                                      <span className="text-slate-400">点击添加备注</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </Table.Cell>
                           </Table.Row>
                           {isExpanded && (
                             <tr className={config.bg}>
-                              <td colSpan={12} className="px-6 py-4 border-t border-slate-100">
+                              <td colSpan={14} className="px-6 py-4 border-t border-slate-100">
                                 <div className="space-y-4">
                                   {suggestionGroups.map((group, gIdx) => (
                                     <div key={gIdx} className={cn('p-4 rounded-lg border', group.bg)}>

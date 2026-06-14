@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Plus, Upload, Filter, X, ArrowUpDown, CheckCircle2,
-  ChevronLeft, ChevronRight, Layers, TrendingUp
+  ChevronLeft, ChevronRight, Layers, TrendingUp, Check,
+  AlertCircle, ArrowRight, Swords
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -14,7 +15,7 @@ import { Modal } from '@/components/ui/Modal';
 import { useStore, useFilteredProducts } from '@/store/useStore';
 import { formatCurrency } from '@/utils/price';
 import { cn } from '@/utils/cn';
-import type { Product } from '@/types';
+import type { Product, ImportColumnMapping, ImportField } from '@/types';
 
 const categories = ['电子产品', '家居用品', '服装配饰', '美妆护肤', '食品饮料', '母婴用品'];
 
@@ -22,7 +23,9 @@ export const ProductPoolPage = () => {
   const navigate = useNavigate();
   const { 
     shops, selectedProductIds, filters, setFilters, resetFilters,
-    toggleProductSelection, selectAllProducts, clearSelection
+    toggleProductSelection, selectAllProducts, clearSelection,
+    processImportFile, confirmImport, resolveImportConflict, resolveAllConflicts,
+    importConflicts, importValidationErrors
   } = useStore();
   
   const filteredProducts = useFilteredProducts();
@@ -31,10 +34,16 @@ export const ProductPoolPage = () => {
   const [sortField, setSortField] = useState<string>('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importStep, setImportStep] = useState<1 | 2 | 3 | 4>(1);
   const [importMode, setImportMode] = useState<'upload' | 'paste'>('upload');
   const [importShopId, setImportShopId] = useState('');
   const [pasteData, setPasteData] = useState('');
+  const [importColumns, setImportColumns] = useState<ImportColumnMapping[]>([]);
+  const [importData, setImportData] = useState<Record<string, string>[]>([]);
+  const [importResult, setImportResult] = useState<{ success: number; skipped: number; overwritten: number } | null>(null);
   const pageSize = 10;
+
+  const stepLabels = ['选择文件', '字段映射', '冲突处理', '导入完成'];
 
   const handleCreateCampaign = () => {
     const newCampaign = useStore.getState().createCampaign({
@@ -76,14 +85,105 @@ export const ProductPoolPage = () => {
       const text = new TextDecoder('utf-8').decode(buffer);
       setPasteData(text);
       setImportMode('paste');
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      if (!importShopId) {
+        alert('请先选择店铺');
+        e.target.value = '';
+        return;
+      }
+      try {
+        const result = await processImportFile(file, importShopId);
+        setImportColumns(result.columns);
+        setImportData(result.data);
+        setImportStep(2);
+      } catch (err) {
+        console.error('文件解析失败:', err);
+        alert('文件解析失败，请检查文件格式');
+      }
     }
     e.target.value = '';
   };
 
-  const handleConfirmImport = () => {
+  const handlePasteImport = () => {
     if (!importShopId || parsedProducts.length === 0) return;
-    useStore.getState().importProducts(importShopId, parsedProducts as Product[]);
-    setShowImportModal(false);
+    const columns: ImportColumnMapping[] = [
+      { columnIndex: 0, columnName: '商品名称', targetField: 'name' },
+      { columnIndex: 1, columnName: 'SKU', targetField: 'sku' },
+      { columnIndex: 2, columnName: '分类', targetField: 'category' },
+      { columnIndex: 3, columnName: '库存', targetField: 'stock' },
+      { columnIndex: 4, columnName: '成本价', targetField: 'costPrice' },
+      { columnIndex: 5, columnName: '售价', targetField: 'salePrice' },
+    ];
+    const data = parsedProducts.map(p => ({
+      name: p.name || '',
+      sku: p.sku || '',
+      category: p.category || '',
+      stock: String(p.stock || ''),
+      costPrice: String(p.costPrice || ''),
+      salePrice: String(p.salePrice || ''),
+    }));
+    setImportColumns(columns);
+    setImportData(data);
+    setImportStep(2);
+  };
+
+  const handleConfirmImport = () => {
+    if (!importShopId || importData.length === 0) return;
+    
+    const conflictsWithResolution = importConflicts.map(c => ({
+      ...c,
+      resolution: c.resolution === 'pending' ? 'skip' as const : c.resolution as 'skip' | 'overwrite',
+    }));
+    
+    const mappedData = importData.map(row => {
+      const mapped: Record<string, string> = {};
+      importColumns.forEach(col => {
+        if (col.targetField !== 'ignore') {
+          mapped[col.targetField] = row[col.columnName] || row[col.targetField] || '';
+        }
+      });
+      return mapped;
+    });
+
+    const skippedCount = conflictsWithResolution.filter(c => c.resolution === 'skip').length;
+    const overwrittenCount = conflictsWithResolution.filter(c => c.resolution === 'overwrite').length;
+    
+    const result = confirmImport(importShopId, mappedData, conflictsWithResolution, importColumns);
+    
+    setImportResult({
+      success: result.length - overwrittenCount,
+      skipped: skippedCount,
+      overwritten: overwrittenCount,
+    });
+    setImportStep(4);
+  };
+
+  const handleColumnMappingChange = (columnIndex: number, targetField: ImportField) => {
+    setImportColumns(prev => prev.map(col => 
+      col.columnIndex === columnIndex ? { ...col, targetField } : col
+    ));
+  };
+
+  const requiredFieldsMapped = useMemo(() => {
+    const fields = importColumns.map(c => c.targetField);
+    return fields.includes('name') && fields.includes('sku');
+  }, [importColumns]);
+
+  const hasValidationErrors = useMemo(() => {
+    return importValidationErrors.length > 0;
+  }, [importValidationErrors]);
+
+
+
+  const getSampleData = (columnIndex: number) => {
+    return importData.slice(0, 3).map(row => row[importColumns[columnIndex]?.columnName] || row[importColumns[columnIndex]?.targetField] || '').filter(Boolean);
+  };
+
+  const resetImportState = () => {
+    setImportStep(1);
+    setImportColumns([]);
+    setImportData([]);
+    setImportResult(null);
     setImportShopId('');
     setPasteData('');
     setImportMode('upload');
@@ -478,132 +578,406 @@ export const ProductPoolPage = () => {
 
       <Modal
         isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
+        onClose={() => {
+          setShowImportModal(false);
+          resetImportState();
+        }}
         title="导入商品"
         size="xl"
       >
         <div className="space-y-5">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">选择店铺</label>
-            <Select
-              value={importShopId}
-              onChange={(e) => setImportShopId(e.target.value)}
-              options={[
-                { value: '', label: '请选择店铺' },
-                ...shops.map(s => ({ value: s.id, label: s.name }))
-              ]}
-            />
-          </div>
-
-          <div className="inline-flex rounded-lg bg-slate-100 p-1">
-            <button
-              onClick={() => setImportMode('upload')}
-              className={cn(
-                'px-4 py-2 text-sm font-medium rounded-md transition-all',
-                importMode === 'upload'
-                  ? 'bg-white text-slate-800 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-800'
-              )}
-            >
-              上传表格
-            </button>
-            <button
-              onClick={() => setImportMode('paste')}
-              className={cn(
-                'px-4 py-2 text-sm font-medium rounded-md transition-all',
-                importMode === 'paste'
-                  ? 'bg-white text-slate-800 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-800'
-              )}
-            >
-              粘贴数据
-            </button>
-          </div>
-
-          {importMode === 'upload' && (
-            <div>
-              <input
-                id="file-upload"
-                type="file"
-                accept=".csv,.txt,.xlsx"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-              <label
-                htmlFor="file-upload"
-                className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-[#1e3a5f] hover:bg-blue-50/50 transition-all"
-              >
-                <Upload className="w-10 h-10 text-slate-400 mb-3" />
-                <p className="text-sm font-medium text-slate-700">点击或拖拽上传 CSV/Excel 文件</p>
-                <p className="text-xs text-slate-500 mt-1">支持 .csv, .txt, .xlsx 格式</p>
-              </label>
-            </div>
-          )}
-
-          {importMode === 'paste' && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">粘贴商品数据</label>
-              <textarea
-                value={pasteData}
-                onChange={(e) => setPasteData(e.target.value)}
-                rows={10}
-                placeholder="每行一个商品，列顺序：商品名称,SKU,分类,库存,成本价,售价"
-                className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]/20 focus:border-[#1e3a5f] resize-none"
-              />
-            </div>
-          )}
-
-          {parsedProducts.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <label className="block text-sm font-medium text-slate-700">
-                  数据预览（前 5 行，共 {parsedProducts.length} 行）
-                </label>
+          <div className="flex items-center justify-between mb-6">
+            {stepLabels.map((label, index) => (
+            <div key={label} className="flex items-center">
+              <div className="flex flex-col items-center">
+                <div className={cn(
+                  'w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all',
+                  importStep > index + 1
+                    ? 'bg-emerald-500 text-white'
+                    : importStep === index + 1
+                      ? 'bg-[#1e3a5f] text-white ring-4 ring-blue-100'
+                      : 'bg-slate-200 text-slate-500'
+                )}>
+                  {importStep > index + 1 ? (
+                    <Check className="w-5 h-5" />
+                  ) : (
+                    index + 1
+                  )}
+                </div>
+                <span className={cn(
+                  'text-xs mt-2 font-medium',
+                  importStep >= index + 1 ? 'text-[#1e3a5f]' : 'text-slate-400'
+                )}>
+                  {label}
+                </span>
               </div>
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                  <Table className="min-w-full">
-                    <Table.Header className="sticky top-0 bg-slate-50">
-                      <tr>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">商品名称</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">SKU</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">分类</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">库存</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">成本价</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">售价</th>
-                      </tr>
-                    </Table.Header>
-                    <Table.Body>
-                      {parsedProducts.slice(0, 5).map((p, i) => (
-                        <Table.Row key={i}>
-                          <Table.Cell className="text-sm">{p.name || '-'}</Table.Cell>
-                          <Table.Cell className="text-sm">{p.sku || '-'}</Table.Cell>
-                          <Table.Cell className="text-sm">{p.category || '-'}</Table.Cell>
-                          <Table.Cell className="text-sm">{p.stock ?? '-'}</Table.Cell>
-                          <Table.Cell className="text-sm">{p.costPrice ?? '-'}</Table.Cell>
-                          <Table.Cell className="text-sm">{p.salePrice ?? '-'}</Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Table.Body>
-                  </Table>
+              {index < 3 && (
+                <div className={cn(
+                  'w-16 h-1 mx-2 rounded',
+                  importStep > index + 1 ? 'bg-emerald-500' : 'bg-slate-200'
+                )} />
+              )}
+            </div>
+          ))}
+          </div>
+
+          {importStep === 1 && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">选择店铺</label>
+                <Select
+                  value={importShopId}
+                  onChange={(e) => setImportShopId(e.target.value)}
+                  options={[
+                    { value: '', label: '请选择店铺' },
+                    ...shops.map(s => ({ value: s.id, label: s.name }))
+                  ]}
+                />
+              </div>
+
+              <div className="inline-flex rounded-lg bg-slate-100 p-1">
+                <button
+                  onClick={() => setImportMode('upload')}
+                  className={cn(
+                    'px-4 py-2 text-sm font-medium rounded-md transition-all',
+                    importMode === 'upload'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  )}
+                >
+                  上传表格
+                </button>
+                <button
+                  onClick={() => setImportMode('paste')}
+                  className={cn(
+                    'px-4 py-2 text-sm font-medium rounded-md transition-all',
+                    importMode === 'paste'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  )}
+                >
+                  粘贴数据
+                </button>
+              </div>
+
+              {importMode === 'upload' && (
+                <div>
+                  <input
+                    id="file-upload"
+                    type="file"
+                    accept=".csv,.txt,.xlsx"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="file-upload"
+                    className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-[#1e3a5f] hover:bg-blue-50/50 transition-all"
+                  >
+                    <Upload className="w-10 h-10 text-slate-400 mb-3" />
+                    <p className="text-sm font-medium text-slate-700">点击或拖拽上传 CSV/Excel 文件</p>
+                    <p className="text-xs text-slate-500 mt-1">支持 .csv, .txt, .xlsx 格式</p>
+                  </label>
+                </div>
+              )}
+
+              {importMode === 'paste' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">粘贴商品数据</label>
+                  <textarea
+                    value={pasteData}
+                    onChange={(e) => setPasteData(e.target.value)}
+                    rows={10}
+                    placeholder="每行一个商品，列顺序：商品名称,SKU,分类,库存,成本价,售价"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]/20 focus:border-[#1e3a5f] resize-none"
+                  />
+                </div>
+              )}
+
+              {parsedProducts.length > 0 && importMode === 'paste' && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="block text-sm font-medium text-slate-700">
+                      数据预览（前 5 行，共 {parsedProducts.length} 行）
+                    </label>
+                  </div>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                      <Table className="min-w-full">
+                        <Table.Header className="sticky top-0 bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">商品名称</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">SKU</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">分类</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">库存</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">成本价</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">售价</th>
+                          </tr>
+                        </Table.Header>
+                        <Table.Body>
+                          {parsedProducts.slice(0, 5).map((p, i) => (
+                            <Table.Row key={i}>
+                              <Table.Cell className="text-sm">{p.name || '-'}</Table.Cell>
+                              <Table.Cell className="text-sm">{p.sku || '-'}</Table.Cell>
+                              <Table.Cell className="text-sm">{p.category || '-'}</Table.Cell>
+                              <Table.Cell className="text-sm">{p.stock ?? '-'}</Table.Cell>
+                              <Table.Cell className="text-sm">{p.costPrice ?? '-'}</Table.Cell>
+                              <Table.Cell className="text-sm">{p.salePrice ?? '-'}</Table.Cell>
+                            </Table.Row>
+                          ))}
+                        </Table.Body>
+                      </Table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                <Button variant="secondary" onClick={() => {
+                  setShowImportModal(false);
+                  resetImportState();
+                }}>
+                  取消
+                </Button>
+                <Button
+                  onClick={handlePasteImport}
+                  disabled={!importShopId || (importMode === 'paste' && parsedProducts.length === 0)}
+                  className="gap-2"
+                >
+                  下一步
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          )}
+
+          {importStep === 2 && (
+            <>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 mb-2">字段映射</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  请确认每列数据对应的目标字段，系统已自动识别，您可以手动调整。
+                </p>
+              </div>
+
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {importColumns.map((col, index) => {
+                  const samples = getSampleData(index);
+                  return (
+                    <div key={col.columnIndex} className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl">
+                      <div className="flex-1">
+                        <p className="font-medium text-slate-800">{col.columnName}</p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          示例: {samples.join(', ') || '-'}
+                        </p>
+                      </div>
+                      <div className="w-48">
+                        <Select
+                          value={col.targetField}
+                          onChange={(e) => handleColumnMappingChange(col.columnIndex, e.target.value as ImportField)}
+                          options={[
+                            { value: 'name', label: '商品名称' },
+                            { value: 'sku', label: 'SKU' },
+                            { value: 'category', label: '分类' },
+                            { value: 'stock', label: '库存' },
+                            { value: 'costPrice', label: '成本价' },
+                            { value: 'salePrice', label: '售价' },
+                            { value: 'imageUrl', label: '图片URL' },
+                            { value: 'ignore', label: '忽略此列' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {!requiredFieldsMapped && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                  <span className="text-sm text-red-600">
+                    必填字段校验失败：商品名称和 SKU 必须有映射
+                  </span>
+                </div>
+              )}
+
+              <div className="flex justify-between pt-4 border-t border-slate-200">
+                <Button variant="secondary" onClick={() => setImportStep(1)}>
+                  上一步
+                </Button>
+                <Button
+                  onClick={() => setImportStep(3)}
+                  disabled={!requiredFieldsMapped}
+                  className="gap-2"
+                >
+                  下一步
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          )}
+
+          {importStep === 3 && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-slate-800">冲突处理 & 校验</h3>
+                {hasValidationErrors && (
+                  <Badge variant="danger">
+                    {importValidationErrors.length} 条校验错误
+                  </Badge>
+                )}
+              </div>
+
+              {hasValidationErrors && (
+                <div className="mb-4">
+                  <h4 className="text-sm font-medium text-slate-700 mb-2">校验错误</h4>
+                  <div className="border border-red-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                    {importValidationErrors.map((error, index) => (
+                      <div key={index} className="p-3 bg-red-50 border-b border-red-100 last:border-b-0">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="font-medium text-red-700">行 {error.row}</span>
+                              <span className="text-red-600">·</span>
+                              <span className="text-red-600">{error.field}</span>
+                            </div>
+                            <p className="text-sm text-red-600 mt-1">{error.message}</p>
+                            {error.value && (
+                              <p className="text-xs text-red-500 mt-1">值: {error.value}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {importConflicts.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-medium text-slate-700">
+                      SKU 冲突 ({importConflicts.length} 条)
+                    </h4>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => resolveAllConflicts('skip')}>
+                        全部跳过
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => resolveAllConflicts('overwrite')}>
+                        全部覆盖
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto">
+                    {importConflicts.map((conflict) => (
+                      <div key={conflict.sku} className="p-4 border-b border-slate-100 last:border-b-0">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                              <Swords className="w-5 h-5 text-amber-500" />
+                              <span className="font-medium text-slate-800">SKU: {conflict.sku}</span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-4 text-sm">
+                              <div className="p-2 bg-slate-50 rounded-lg">
+                                <p className="text-xs text-slate-500">现有商品</p>
+                                <p className="font-medium text-slate-700">{conflict.newProduct.name}</p>
+                              </div>
+                              <div className="p-2 bg-blue-50 rounded-lg">
+                                <p className="text-xs text-slate-500">新商品</p>
+                                <p className="font-medium text-blue-700">{conflict.newProduct.name}</p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4 ml-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`conflict-${conflict.sku}`}
+                                checked={conflict.resolution === 'skip' || conflict.resolution === 'pending'}
+                                onChange={() => resolveImportConflict(conflict.sku, 'skip')}
+                                className="w-4 h-4 text-[#1e3a5f] focus:ring-[#1e3a5f]"
+                              />
+                              <span className="text-sm text-slate-600">跳过</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`conflict-${conflict.sku}`}
+                                checked={conflict.resolution === 'overwrite'}
+                                onChange={() => resolveImportConflict(conflict.sku, 'overwrite')}
+                                className="w-4 h-4 text-[#1e3a5f] focus:ring-[#1e3a5f]"
+                              />
+                              <span className="text-sm text-slate-600">覆盖</span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                  <span className="text-sm text-emerald-700 font-medium">无 SKU 冲突</span>
+                </div>
+              )}
+
+              <div className="flex justify-between pt-4 border-t border-slate-200">
+                <Button variant="secondary" onClick={() => setImportStep(2)}>
+                  上一步
+                </Button>
+                <Button
+                  onClick={handleConfirmImport}
+                  disabled={hasValidationErrors}
+                  className="gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  开始导入
+                </Button>
+              </div>
+            </>
+          )}
+
+          {importStep === 4 && importResult && (
+            <>
+              <div className="text-center py-8">
+                <div className="w-20 h-20 mx-auto mb-6 bg-emerald-100 rounded-full flex items-center justify-center">
+                  <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800 mb-2">导入完成</h3>
+                <p className="text-slate-500 mb-8">共处理 {importData.length} 条数据</p>
+
+                <div className="grid grid-cols-3 gap-4 mb-8">
+                  <div className="p-4 bg-emerald-50 rounded-xl">
+                    <p className="text-3xl font-bold text-emerald-600">{importResult.success}</p>
+                    <p className="text-sm text-emerald-600">成功导入</p>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-xl">
+                    <p className="text-3xl font-bold text-slate-600">{importResult.skipped}</p>
+                    <p className="text-sm text-slate-600">跳过</p>
+                  </div>
+                  <div className="p-4 bg-blue-50 rounded-xl">
+                    <p className="text-3xl font-bold text-blue-600">{importResult.overwritten}</p>
+                    <p className="text-sm text-blue-600">覆盖</p>
+                  </div>
+                </div>
+
+                <div className="flex justify-center gap-3">
+                  <Button variant="secondary" onClick={() => {
+                  resetImportState();
+                }}>
+                    继续导入
+                  </Button>
+                  <Button onClick={() => {
+                    setShowImportModal(false);
+                    resetImportState();
+                  }}>
+                    完成
+                  </Button>
                 </div>
               </div>
-            </div>
+            </>
           )}
-
-          <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
-            <Button variant="secondary" onClick={() => setShowImportModal(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={handleConfirmImport}
-              disabled={!importShopId || parsedProducts.length === 0}
-              className="gap-2"
-            >
-              <Upload className="w-4 h-4" />
-              确认导入
-            </Button>
-          </div>
         </div>
       </Modal>
     </div>

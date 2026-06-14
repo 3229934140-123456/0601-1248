@@ -1,4 +1,4 @@
-import type { Product, PromotionRule, PriceCheckResult } from '@/types';
+import type { Product, PromotionRule, PriceCheckResult, ProcessingStatus } from '@/types';
 
 export const calculateActivityPrice = (
   originalPrice: number,
@@ -109,6 +109,7 @@ export const runPriceCheck = (
       riskCategories,
       riskLevel,
       suggestions,
+      processingStatus: 'pending' as ProcessingStatus,
     };
   });
 };

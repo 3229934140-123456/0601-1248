@@ -1,3 +1,25 @@
+export type ImportField = 'name' | 'sku' | 'category' | 'stock' | 'costPrice' | 'salePrice' | 'imageUrl' | 'ignore';
+
+export interface ImportColumnMapping {
+  columnIndex: number;
+  columnName: string;
+  targetField: ImportField;
+}
+
+export interface ImportConflict {
+  sku: string;
+  existingProductId: string;
+  newProduct: Partial<Product>;
+  resolution: 'skip' | 'overwrite' | 'pending';
+}
+
+export interface ImportValidationError {
+  row: number;
+  field: string;
+  message: string;
+  value: string;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -36,10 +58,12 @@ export interface PromotionRule {
 }
 
 export interface StatusHistoryItem {
+  id: string;
   status: Campaign['status'];
   changedAt: string;
   comment?: string;
   operator?: string;
+  submissionId?: string;
 }
 
 export interface Campaign {
@@ -59,6 +83,8 @@ export interface Campaign {
 
 export type RiskCategory = 'below_cost' | 'coupon_below_cost' | 'low_margin' | 'safe';
 
+export type ProcessingStatus = 'pending' | 'price_adjusted' | 'coupon_adjusted' | 'both_adjusted' | 'ignored';
+
 export interface PriceCheckResult {
   productId: string;
   productName: string;
@@ -73,6 +99,9 @@ export interface PriceCheckResult {
   riskCategories: RiskCategory[];
   riskLevel: 'high' | 'medium' | 'low';
   suggestions: string[];
+  processingStatus: ProcessingStatus;
+  processingNote?: string;
+  processedAt?: string;
 }
 
 export interface DashboardStats {
