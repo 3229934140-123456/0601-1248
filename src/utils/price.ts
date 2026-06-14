@@ -44,27 +44,55 @@ export const runPriceCheck = (
   return products.map(product => {
     const activityPrice = calculateActivityPrice(product.salePrice, rules);
     const finalPriceWithCoupons = calculatePriceWithCoupons(activityPrice, true);
-    const belowCost = finalPriceWithCoupons <= product.costPrice;
-    const couponStackRisk = activityPrice > product.costPrice && finalPriceWithCoupons <= product.costPrice;
-    
+
+    // 活动价低于成本（直接定价错误）
+    const activityBelowCost = activityPrice <= product.costPrice;
+    // 叠券后低于成本（但活动价本身没亏本）
+    const couponBelowCost = activityPrice > product.costPrice && finalPriceWithCoupons <= product.costPrice;
+
+    // belowCost: 任何方式低于成本，保留兼容
+    const belowCost = activityBelowCost || couponBelowCost;
+    const couponStackRisk = couponBelowCost;
+
+    const activityMargin = activityPrice > 0
+      ? ((activityPrice - product.costPrice) / activityPrice) * 100
+      : -100;
+    const finalMargin = finalPriceWithCoupons > 0
+      ? ((finalPriceWithCoupons - product.costPrice) / finalPriceWithCoupons) * 100
+      : -100;
+
+    const riskCategories: import('@/types').RiskCategory[] = [];
+    if (activityBelowCost) riskCategories.push('below_cost');
+    if (couponBelowCost) riskCategories.push('coupon_below_cost');
+
     let riskLevel: 'high' | 'medium' | 'low' = 'low';
     const suggestions: string[] = [];
 
-    if (belowCost) {
+    if (activityBelowCost) {
       riskLevel = 'high';
-      suggestions.push('活动价低于成本价，存在亏损风险');
-      suggestions.push(`建议提高活动价至 ${(product.costPrice * 1.1).toFixed(2)} 元以上`);
-    } else if (couponStackRisk) {
-      riskLevel = 'medium';
-      suggestions.push('优惠券叠加后价格低于成本价');
-      suggestions.push('建议设置优惠券使用门槛或限制叠加');
-    } else if (activityPrice < product.costPrice * 1.2) {
+      suggestions.push(`活动价 ${activityPrice.toFixed(2)} 元 低于成本 ${product.costPrice.toFixed(2)} 元，存在直接亏损`);
+      suggestions.push(`⚠ 调整建议：将活动价上调至 ${(product.costPrice * 1.1).toFixed(2)} 元以上，或降低采购成本`);
+    } else {
+      suggestions.push(`活动价毛利正常，利润率为 ${activityMargin.toFixed(1)}%`);
+    }
+
+    if (couponBelowCost) {
+      riskLevel = riskLevel === 'high' ? 'high' : 'medium';
+      suggestions.push(`叠券后价 ${finalPriceWithCoupons.toFixed(2)} 元 低于成本，实际成交会亏损`);
+      suggestions.push(`⚠ 调整建议：限制优惠券叠加使用，或提高满减门槛至 ${(product.costPrice + 60).toFixed(0)} 元档`);
+    } else if (!activityBelowCost && finalMargin < 10) {
+      riskCategories.push('low_margin');
       riskLevel = 'low';
-      suggestions.push('活动利润率偏低，建议关注销量预期');
+      suggestions.push(`叠券后利润率仅 ${finalMargin.toFixed(1)}%，偏低`);
+    }
+
+    if (riskCategories.length === 0) {
+      riskCategories.push('safe');
+      suggestions.push('价格校验通过，无亏损风险');
     }
 
     if (rules.some(r => r.type === 'gift')) {
-      suggestions.push('赠品活动需额外核算赠品成本');
+      suggestions.push('赠品活动需额外核算赠品成本，可能影响实际毛利');
     }
 
     return {
@@ -76,6 +104,9 @@ export const runPriceCheck = (
       belowCost,
       couponStackRisk,
       finalPriceWithCoupons,
+      activityMargin,
+      finalMargin,
+      riskCategories,
       riskLevel,
       suggestions,
     };

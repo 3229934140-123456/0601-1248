@@ -35,6 +35,13 @@ export interface PromotionRule {
   };
 }
 
+export interface StatusHistoryItem {
+  status: Campaign['status'];
+  changedAt: string;
+  comment?: string;
+  operator?: string;
+}
+
 export interface Campaign {
   id: string;
   name: string;
@@ -45,9 +52,12 @@ export interface Campaign {
   productIds: string[];
   rules: PromotionRule[];
   reviewComment?: string;
+  statusHistory: StatusHistoryItem[];
   createdAt: string;
   updatedAt: string;
 }
+
+export type RiskCategory = 'below_cost' | 'coupon_below_cost' | 'low_margin' | 'safe';
 
 export interface PriceCheckResult {
   productId: string;
@@ -58,6 +68,9 @@ export interface PriceCheckResult {
   belowCost: boolean;
   couponStackRisk: boolean;
   finalPriceWithCoupons: number;
+  activityMargin: number;
+  finalMargin: number;
+  riskCategories: RiskCategory[];
   riskLevel: 'high' | 'medium' | 'low';
   suggestions: string[];
 }

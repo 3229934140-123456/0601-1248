@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Plus, Tag, Calendar, Gift, Percent, TrendingUp,
@@ -48,7 +48,7 @@ export const CampaignConfigPage = () => {
     createCampaign, updateCampaign, addRuleToCampaign,
     updateRuleInCampaign, removeRuleFromCampaign,
     addProductsToCampaign, removeProductFromCampaign,
-    submitCampaignForReview, reviewCampaign
+    submitCampaignForReview, reviewCampaign, revertCampaignToDraft
   } = useStore();
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -67,6 +67,23 @@ export const CampaignConfigPage = () => {
     }
     return currentCampaign;
   }, [campaigns, id, currentCampaign, isEditMode]);
+
+  useEffect(() => {
+    if (id === 'new') {
+      const newCampaign = createCampaign({
+        name: '',
+        type: campaignTypes[0],
+        status: 'draft',
+        startTime: new Date().toISOString().split('T')[0],
+        endTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        productIds: [],
+        rules: [],
+      });
+      setCurrentCampaign(newCampaign);
+      setFormData(newCampaign);
+      navigate(`/campaigns/${newCampaign.id}`);
+    }
+  }, [id]);
 
   const campaignProducts = useMemo(() => {
     if (!activeCampaign) return [];
@@ -391,14 +408,28 @@ export const CampaignConfigPage = () => {
     );
   }
 
-  if (!activeCampaign) {
+  if (!activeCampaign && id !== 'new') {
     return (
-      <div className="text-center py-16">
-        <Tag className="w-16 h-16 mx-auto mb-4 text-slate-300" />
-        <p className="text-slate-500 mb-4">活动不存在或已被删除</p>
-        <Button onClick={() => navigate('/campaigns')}>返回列表</Button>
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Card className="max-w-md w-full">
+          <Card.Body className="text-center py-12">
+            <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <XCircle className="w-10 h-10 text-slate-400" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">活动不存在或已删除</h2>
+            <p className="text-slate-500 mb-8">您访问的活动可能已被删除，或者链接有误</p>
+            <Button onClick={() => navigate('/campaigns')} className="gap-2">
+              <ArrowLeft className="w-4 h-4" />
+              返回活动列表
+            </Button>
+          </Card.Body>
+        </Card>
       </div>
     );
+  }
+
+  if (!activeCampaign) {
+    return null;
   }
 
   return (
@@ -449,6 +480,91 @@ export const CampaignConfigPage = () => {
           )}
         </div>
       </div>
+
+      {activeCampaign.status === 'rejected' && (
+        <div className="px-5 py-4 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-4">
+          <div className="flex items-start gap-3 flex-1 min-w-0">
+            <XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="font-semibold text-red-700 mb-1">活动已被驳回</p>
+              <p className="text-sm text-red-600 break-words">
+                {activeCampaign.reviewComment || '暂无驳回原因'}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="danger"
+            className="shrink-0 gap-2"
+            onClick={() => {
+              revertCampaignToDraft(activeCampaign.id);
+              setCurrentStep(0);
+            }}
+          >
+            <Edit2 className="w-4 h-4" />
+            重新编辑
+          </Button>
+        </div>
+      )}
+
+      <Card>
+        <Card.Header>
+          <Card.Title className="flex items-center gap-2">
+            <Clock className="w-5 h-5 text-slate-500" />
+            状态流转时间线
+          </Card.Title>
+        </Card.Header>
+        <Card.Body>
+          <div className="relative pl-2">
+            {activeCampaign.statusHistory.map((item, index) => {
+              const config = statusConfig[item.status];
+              const isLast = index === activeCampaign.statusHistory.length - 1;
+              const dotColors: Record<Campaign['status'], string> = {
+                draft: 'bg-slate-400',
+                pending: 'bg-amber-500',
+                approved: 'bg-emerald-500',
+                rejected: 'bg-red-500',
+                active: 'bg-blue-500',
+                ended: 'bg-slate-600',
+              };
+              return (
+                <div key={index} className="relative pb-6 last:pb-0">
+                  {!isLast && (
+                    <div className="absolute left-3 top-6 w-0.5 h-full bg-slate-200" />
+                  )}
+                  <div className="flex items-start gap-4 relative">
+                    <div className={cn(
+                      'w-6 h-6 rounded-full shrink-0 mt-1 ring-4 ring-white flex items-center justify-center',
+                      dotColors[item.status]
+                    )}>
+                      <div className="w-2 h-2 rounded-full bg-white" />
+                    </div>
+                    <div className="flex-1 min-w-0 pt-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={config.variant}>
+                          {config.label}
+                        </Badge>
+                        <span className="text-sm text-slate-500">
+                          {formatDateTime(item.changedAt)}
+                        </span>
+                        {item.operator && (
+                          <span className="text-sm text-slate-500">
+                            · {item.operator}
+                          </span>
+                        )}
+                      </div>
+                      {item.comment && (
+                        <p className="mt-2 text-sm text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+                          {item.comment}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card.Body>
+      </Card>
 
       <div className="flex items-center justify-between px-4 py-3 bg-white rounded-xl border border-slate-200">
         <div className="flex items-center gap-2">

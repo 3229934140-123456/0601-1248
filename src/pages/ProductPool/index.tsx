@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Table } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Modal } from '@/components/ui/Modal';
 import { useStore, useFilteredProducts } from '@/store/useStore';
 import { formatCurrency } from '@/utils/price';
 import { cn } from '@/utils/cn';
@@ -29,7 +30,64 @@ export const ProductPoolPage = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [sortField, setSortField] = useState<string>('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importMode, setImportMode] = useState<'upload' | 'paste'>('upload');
+  const [importShopId, setImportShopId] = useState('');
+  const [pasteData, setPasteData] = useState('');
   const pageSize = 10;
+
+  const handleCreateCampaign = () => {
+    const newCampaign = useStore.getState().createCampaign({
+      name: '',
+      productIds: [...selectedProductIds],
+    });
+    clearSelection();
+    navigate(`/campaigns/${newCampaign.id}`);
+  };
+
+  const parseProductsFromText = (text: string): Partial<Product>[] => {
+    const lines = text.split('\n').filter(line => line.trim());
+    return lines.map(line => {
+      const cols = line.split(',').map(c => c.trim());
+      return {
+        name: cols[0] || '',
+        sku: cols[1] || '',
+        category: cols[2] || '',
+        stock: Number(cols[3]) || 0,
+        costPrice: Number(cols[4]) || 0,
+        salePrice: Number(cols[5]) || 0,
+      };
+    });
+  };
+
+  const parsedProducts = useMemo(() => {
+    if (importMode === 'paste') {
+      return parseProductsFromText(pasteData);
+    }
+    return [];
+  }, [importMode, pasteData]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext === 'csv' || ext === 'txt') {
+      const buffer = await file.arrayBuffer();
+      const text = new TextDecoder('utf-8').decode(buffer);
+      setPasteData(text);
+      setImportMode('paste');
+    }
+    e.target.value = '';
+  };
+
+  const handleConfirmImport = () => {
+    if (!importShopId || parsedProducts.length === 0) return;
+    useStore.getState().importProducts(importShopId, parsedProducts as Product[]);
+    setShowImportModal(false);
+    setImportShopId('');
+    setPasteData('');
+    setImportMode('upload');
+  };
 
   const sortedProducts = useMemo(() => {
     return [...filteredProducts].sort((a, b) => {
@@ -107,11 +165,11 @@ export const ProductPoolPage = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="secondary" className="gap-2">
+          <Button variant="secondary" className="gap-2" onClick={() => setShowImportModal(true)}>
             <Upload className="w-4 h-4" />
             导入商品
           </Button>
-          <Button onClick={() => navigate('/campaigns/new')} className="gap-2">
+          <Button onClick={handleCreateCampaign} className="gap-2">
             <Plus className="w-4 h-4" />
             新建活动
           </Button>
@@ -417,6 +475,137 @@ export const ProductPoolPage = () => {
           </Button>
         </div>
       )}
+
+      <Modal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        title="导入商品"
+        size="xl"
+      >
+        <div className="space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">选择店铺</label>
+            <Select
+              value={importShopId}
+              onChange={(e) => setImportShopId(e.target.value)}
+              options={[
+                { value: '', label: '请选择店铺' },
+                ...shops.map(s => ({ value: s.id, label: s.name }))
+              ]}
+            />
+          </div>
+
+          <div className="inline-flex rounded-lg bg-slate-100 p-1">
+            <button
+              onClick={() => setImportMode('upload')}
+              className={cn(
+                'px-4 py-2 text-sm font-medium rounded-md transition-all',
+                importMode === 'upload'
+                  ? 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-800'
+              )}
+            >
+              上传表格
+            </button>
+            <button
+              onClick={() => setImportMode('paste')}
+              className={cn(
+                'px-4 py-2 text-sm font-medium rounded-md transition-all',
+                importMode === 'paste'
+                  ? 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-800'
+              )}
+            >
+              粘贴数据
+            </button>
+          </div>
+
+          {importMode === 'upload' && (
+            <div>
+              <input
+                id="file-upload"
+                type="file"
+                accept=".csv,.txt,.xlsx"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <label
+                htmlFor="file-upload"
+                className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-[#1e3a5f] hover:bg-blue-50/50 transition-all"
+              >
+                <Upload className="w-10 h-10 text-slate-400 mb-3" />
+                <p className="text-sm font-medium text-slate-700">点击或拖拽上传 CSV/Excel 文件</p>
+                <p className="text-xs text-slate-500 mt-1">支持 .csv, .txt, .xlsx 格式</p>
+              </label>
+            </div>
+          )}
+
+          {importMode === 'paste' && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">粘贴商品数据</label>
+              <textarea
+                value={pasteData}
+                onChange={(e) => setPasteData(e.target.value)}
+                rows={10}
+                placeholder="每行一个商品，列顺序：商品名称,SKU,分类,库存,成本价,售价"
+                className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]/20 focus:border-[#1e3a5f] resize-none"
+              />
+            </div>
+          )}
+
+          {parsedProducts.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-slate-700">
+                  数据预览（前 5 行，共 {parsedProducts.length} 行）
+                </label>
+              </div>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                  <Table className="min-w-full">
+                    <Table.Header className="sticky top-0 bg-slate-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">商品名称</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">SKU</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">分类</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">库存</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">成本价</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">售价</th>
+                      </tr>
+                    </Table.Header>
+                    <Table.Body>
+                      {parsedProducts.slice(0, 5).map((p, i) => (
+                        <Table.Row key={i}>
+                          <Table.Cell className="text-sm">{p.name || '-'}</Table.Cell>
+                          <Table.Cell className="text-sm">{p.sku || '-'}</Table.Cell>
+                          <Table.Cell className="text-sm">{p.category || '-'}</Table.Cell>
+                          <Table.Cell className="text-sm">{p.stock ?? '-'}</Table.Cell>
+                          <Table.Cell className="text-sm">{p.costPrice ?? '-'}</Table.Cell>
+                          <Table.Cell className="text-sm">{p.salePrice ?? '-'}</Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Table.Body>
+                  </Table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+            <Button variant="secondary" onClick={() => setShowImportModal(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={handleConfirmImport}
+              disabled={!importShopId || parsedProducts.length === 0}
+              className="gap-2"
+            >
+              <Upload className="w-4 h-4" />
+              确认导入
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

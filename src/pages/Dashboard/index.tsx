@@ -53,7 +53,7 @@ export const DashboardPage = () => {
 
   useEffect(() => {
     if (selectedCampaignId) {
-      handleLoadData();
+      handleLoadData(selectedCampaignId);
     }
   }, [selectedCampaignId, dateRange]);
 
@@ -61,10 +61,10 @@ export const DashboardPage = () => {
     return campaigns.find(c => c.id === selectedCampaignId) || null;
   }, [campaigns, selectedCampaignId]);
 
-  const handleLoadData = async () => {
+  const handleLoadData = async (campaignId?: string) => {
     setIsLoading(true);
     await new Promise(resolve => setTimeout(resolve, 500));
-    loadDashboardData(selectedCampaignId);
+    loadDashboardData(campaignId || selectedCampaignId);
     setIsLoading(false);
   };
 
@@ -103,7 +103,7 @@ export const DashboardPage = () => {
       },
       {
         title: '转化率',
-        value: formatPercent(dashboardStats.conversionRate),
+        value: formatPercent(dashboardStats.conversionRate * 100),
         trend: dashboardStats.conversionGrowth,
         trendLabel: '环比',
         icon: Target,
@@ -156,6 +156,40 @@ export const DashboardPage = () => {
     return null;
   };
 
+  const goalItems = useMemo(() => {
+    if (!dashboardStats) return [];
+    return [
+      { 
+        name: '销售额目标', 
+        current: dashboardStats.totalRevenue, 
+        target: 150000,
+        format: (v: number) => `¥${v.toLocaleString()}`,
+        targetFormat: (v: number) => v.toLocaleString()
+      },
+      { 
+        name: '订单量目标', 
+        current: dashboardStats.totalOrders, 
+        target: 1000,
+        format: (v: number) => v.toLocaleString(),
+        targetFormat: (v: number) => v.toLocaleString()
+      },
+      { 
+        name: '转化率目标', 
+        current: +(dashboardStats.conversionRate * 100).toFixed(2), 
+        target: 5,
+        format: (v: number) => `${v.toFixed(2)}%`,
+        targetFormat: (v: number) => `${v}%`
+      },
+      { 
+        name: 'ROI目标', 
+        current: dashboardStats.roi, 
+        target: 4,
+        format: (v: number) => `${v.toFixed(2)}x`,
+        targetFormat: (v: number) => `${v}x`
+      },
+    ];
+  }, [dashboardStats]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -179,7 +213,7 @@ export const DashboardPage = () => {
             导出复盘报告
           </Button>
           <Button 
-            onClick={handleLoadData} 
+            onClick={() => handleLoadData(selectedCampaignId)} 
             className="gap-2"
             loading={isLoading}
           >
@@ -549,12 +583,7 @@ export const DashboardPage = () => {
                   </Card.Title>
                 </Card.Header>
                 <Card.Body className="space-y-5">
-                  {[
-                    { name: '销售额目标', current: dashboardStats.totalRevenue, target: 150000 },
-                    { name: '订单量目标', current: dashboardStats.totalOrders, target: 1000 },
-                    { name: '转化率目标', current: dashboardStats.conversionRate * 100, target: 5 },
-                    { name: 'ROI目标', current: dashboardStats.roi, target: 4 },
-                  ].map((item, index) => {
+                  {goalItems.map((item, index) => {
                     const percentage = Math.min((item.current / item.target) * 100, 100);
                     const isComplete = percentage >= 100;
                     return (
@@ -575,7 +604,7 @@ export const DashboardPage = () => {
                           />
                         </div>
                         <p className="text-xs text-slate-400 mt-1">
-                          目标: {item.target.toLocaleString()}
+                          目标: {item.targetFormat(item.target)}
                         </p>
                       </div>
                     );

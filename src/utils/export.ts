@@ -51,28 +51,116 @@ export const exportSignUpList = (products: Product[], campaign: Campaign) => {
 };
 
 export const exportPriceCheckReport = (results: PriceCheckResult[], campaignName: string) => {
-  const columns = [
-    { key: 'productName' as keyof PriceCheckResult, label: '商品名称' },
-    { key: 'originalPrice' as keyof PriceCheckResult, label: '原价(元)' },
-    { key: 'activityPrice' as keyof PriceCheckResult, label: '活动价(元)' },
-    { key: 'costPrice' as keyof PriceCheckResult, label: '成本价(元)' },
-    { key: 'finalPriceWithCoupons' as keyof PriceCheckResult, label: '叠加券后价(元)' },
-    { key: 'belowCost' as keyof PriceCheckResult, label: '低于成本' },
-    { key: 'couponStackRisk' as keyof PriceCheckResult, label: '叠券风险' },
-    { key: 'riskLevel' as keyof PriceCheckResult, label: '风险等级' },
+  const wb = XLSX.utils.book_new();
+
+  const total = results.length;
+  const safeCount = results.filter(r => r.riskCategories.includes('safe')).length;
+  const belowCostCount = results.filter(r => r.riskCategories.includes('below_cost')).length;
+  const couponBelowCostCount = results.filter(r => r.riskCategories.includes('coupon_below_cost')).length;
+  const lowMarginCount = results.filter(r => r.riskCategories.includes('low_margin')).length;
+  const highCount = results.filter(r => r.riskLevel === 'high').length;
+  const mediumCount = results.filter(r => r.riskLevel === 'medium').length;
+  const lowCount = results.filter(r => r.riskLevel === 'low').length;
+
+  const summaryData = [
+    { 指标: '总商品数', 数值: total },
+    { 指标: '安全通过数量', 数值: safeCount },
+    { 指标: '活动价低于成本数量', 数值: belowCostCount },
+    { 指标: '叠券后低于成本数量', 数值: couponBelowCostCount },
+    { 指标: '低毛利风险数量', 数值: lowMarginCount },
+    { 指标: '高风险数量', 数值: highCount },
+    { 指标: '中风险数量', 数值: mediumCount },
+    { 指标: '低风险数量', 数值: lowCount },
+  ];
+  const summaryWs = XLSX.utils.json_to_sheet(summaryData);
+  XLSX.utils.book_append_sheet(wb, summaryWs, '总体概览');
+
+  const detailColumns = [
+    { key: 'productName' as const, label: '商品名称' },
+    { key: 'originalPrice' as const, label: '原价(元)' },
+    { key: 'activityPrice' as const, label: '活动价(元)' },
+    { key: 'costPrice' as const, label: '成本价(元)' },
+    { key: 'activityMargin' as const, label: '活动毛利率(%)' },
+    { key: 'finalPriceWithCoupons' as const, label: '叠券后价(元)' },
+    { key: 'finalMargin' as const, label: '叠券毛利率(%)' },
+    { key: 'riskLevel' as const, label: '风险等级' },
+    { key: 'suggestionsText' as const, label: '建议' },
   ];
 
-  const formattedResults = results.map(r => ({
-    ...r,
+  const formatDetailRow = (r: PriceCheckResult) => ({
+    productName: r.productName,
+    originalPrice: r.originalPrice,
+    activityPrice: r.activityPrice,
+    costPrice: r.costPrice,
+    activityMargin: r.activityMargin.toFixed(2),
+    finalPriceWithCoupons: r.finalPriceWithCoupons,
+    finalMargin: r.finalMargin.toFixed(2),
+    riskLevel: r.riskLevel === 'high' ? '高' : r.riskLevel === 'medium' ? '中' : '低',
+    suggestionsText: r.suggestions.join('；'),
+  });
+
+  const belowCostRows = results.filter(r => r.riskCategories.includes('below_cost')).map(formatDetailRow);
+  const belowCostWsData = belowCostRows.map(row => 
+    detailColumns.reduce((acc, col) => {
+      acc[col.label] = (row as any)[col.key];
+      return acc;
+    }, {} as Record<string, unknown>)
+  );
+  const belowCostWs = XLSX.utils.json_to_sheet(belowCostWsData);
+  XLSX.utils.book_append_sheet(wb, belowCostWs, '活动价低于成本明细');
+
+  const couponBelowCostRows = results.filter(r => r.riskCategories.includes('coupon_below_cost')).map(formatDetailRow);
+  const couponBelowCostWsData = couponBelowCostRows.map(row => 
+    detailColumns.reduce((acc, col) => {
+      acc[col.label] = (row as any)[col.key];
+      return acc;
+    }, {} as Record<string, unknown>)
+  );
+  const couponBelowCostWs = XLSX.utils.json_to_sheet(couponBelowCostWsData);
+  XLSX.utils.book_append_sheet(wb, couponBelowCostWs, '叠券后低于成本明细');
+
+  const fullColumns = [
+    { key: 'productName' as const, label: '商品名称' },
+    { key: 'originalPrice' as const, label: '原价(元)' },
+    { key: 'activityPrice' as const, label: '活动价(元)' },
+    { key: 'costPrice' as const, label: '成本价(元)' },
+    { key: 'activityMargin' as const, label: '活动毛利率(%)' },
+    { key: 'finalPriceWithCoupons' as const, label: '叠券后价(元)' },
+    { key: 'finalMargin' as const, label: '叠券毛利率(%)' },
+    { key: 'belowCost' as const, label: '低于成本' },
+    { key: 'couponStackRisk' as const, label: '叠券风险' },
+    { key: 'riskCategoriesText' as const, label: '风险类别' },
+    { key: 'riskLevel' as const, label: '风险等级' },
+    { key: 'suggestionsText' as const, label: '建议' },
+  ];
+  const fullRows = results.map(r => ({
+    productName: r.productName,
+    originalPrice: r.originalPrice,
+    activityPrice: r.activityPrice,
+    costPrice: r.costPrice,
+    activityMargin: r.activityMargin.toFixed(2),
+    finalPriceWithCoupons: r.finalPriceWithCoupons,
+    finalMargin: r.finalMargin.toFixed(2),
     belowCost: r.belowCost ? '是' : '否',
     couponStackRisk: r.couponStackRisk ? '是' : '否',
+    riskCategoriesText: r.riskCategories.map(c => 
+      c === 'below_cost' ? '活动价亏本' : 
+      c === 'coupon_below_cost' ? '叠券亏本' : 
+      c === 'low_margin' ? '低毛利预警' : '安全通过'
+    ).join('、'),
     riskLevel: r.riskLevel === 'high' ? '高' : r.riskLevel === 'medium' ? '中' : '低',
+    suggestionsText: r.suggestions.join('；'),
   }));
+  const fullWsData = fullRows.map(row => 
+    fullColumns.reduce((acc, col) => {
+      acc[col.label] = (row as any)[col.key];
+      return acc;
+    }, {} as Record<string, unknown>)
+  );
+  const fullWs = XLSX.utils.json_to_sheet(fullWsData);
+  XLSX.utils.book_append_sheet(wb, fullWs, '完整明细');
 
-  exportToExcel(formattedResults, columns, {
-    filename: `价格校验报告_${campaignName}_${formatDate(new Date())}`,
-    sheetName: '校验结果',
-  });
+  XLSX.writeFile(wb, `价格校验报告_${campaignName}_${formatDate(new Date())}.xlsx`);
 };
 
 export const exportDashboardReport = (
